@@ -5,10 +5,13 @@ type PresentOverlayProps = {
   phase: PresentPhase
   clip: Clip | null
   clipIndex: number
+  pauseIndex?: number
+  pauseCount?: number
   total: number
   holdMs: number
   holdTotal: number
   onSkip: () => void
+  onReady: () => void
   onExit: () => void
 }
 
@@ -21,10 +24,13 @@ export function PresentOverlay({
   phase,
   clip,
   clipIndex,
+  pauseIndex = 0,
+  pauseCount = 1,
   total,
   holdMs,
   holdTotal,
   onSkip,
+  onReady,
   onExit,
 }: PresentOverlayProps) {
   if (phase === 'off' || phase === 'drawing') return null
@@ -35,7 +41,9 @@ export function PresentOverlay({
         {phase === 'firstLook'
           ? 'First look · live speed · no mark-up'
           : phase === 'toPause'
-            ? 'Replay · pausing for coach mark-up'
+            ? pauseCount > 1
+              ? `Replay · teach pause ${pauseIndex + 1} of ${pauseCount}`
+              : 'Replay · pausing for coach mark-up'
             : 'Play out'}
         <span>
           {playNumber(clipIndex)} · {clipIndex + 1}/{total}
@@ -44,7 +52,8 @@ export function PresentOverlay({
     )
   }
 
-  const isReset = phase === 'reset'
+  const waitingForCoach = phase === 'resetReady'
+  const isReset = phase === 'reset' || waitingForCoach
   const heading = phase === 'complete' ? 'Review complete' : isReset ? 'Watch it again' : clip ? playHeading(clipIndex) : 'Play'
   const sub =
     phase === 'complete'
@@ -57,9 +66,13 @@ export function PresentOverlay({
   const detail =
     phase === 'complete'
       ? null
-      : isReset
-        ? 'Players just saw the play at full speed. Next comes the teach pause, then the finish.'
-        : 'Full play first, live speed, no drawings. Replay with mark-up comes after.'
+      : waitingForCoach
+        ? pauseCount > 1
+          ? `Hit Space when you are ready. Coaching view plays the same clip with ${pauseCount} teach pauses.`
+          : 'Hit Space when you are ready. The coaching view starts after a 5 second count.'
+        : isReset
+          ? 'Players just saw the play at full speed. Space skips the rest of the count.'
+          : 'Full play first, live speed, no drawings. Space starts it now, or wait for the count.'
   const progress = holdTotal > 0 ? Math.min(1, 1 - holdMs / holdTotal) : 0
 
   return (
@@ -70,7 +83,7 @@ export function PresentOverlay({
       <h2>{heading}</h2>
       {sub ? <p className="present-sub">{sub}</p> : null}
       {detail ? <p className="present-detail">{detail}</p> : null}
-      {phase !== 'complete' ? (
+      {phase === 'announce' || phase === 'reset' ? (
         <div className="hold-stack" aria-live="polite">
           <strong className="hold-count">{holdLabel(holdMs)}</strong>
           <div className="hold-meter" aria-hidden="true">
@@ -82,11 +95,15 @@ export function PresentOverlay({
       <div className="present-actions">
         {phase === 'complete' ? (
           <button type="button" className="play-btn" onClick={onExit}>
-            Back to bench
+            Back to bench · Space
+          </button>
+        ) : waitingForCoach ? (
+          <button type="button" className="play-btn" onClick={onReady}>
+            Play · Space
           </button>
         ) : (
           <button type="button" className="ghost" onClick={onSkip}>
-            Skip wait
+            Skip wait · Space
           </button>
         )}
       </div>
@@ -97,21 +114,39 @@ export function PresentOverlay({
 type PresentDrawBarProps = {
   stepIndex: number
   stepCount: number
+  pauseIndex?: number
+  pauseCount?: number
   onBack: () => void
   onNext: () => void
   onContinue: () => void
 }
 
-export function PresentDrawBar({ stepIndex, stepCount, onBack, onNext, onContinue }: PresentDrawBarProps) {
+export function PresentDrawBar({
+  stepIndex,
+  stepCount,
+  pauseIndex = 0,
+  pauseCount = 1,
+  onBack,
+  onNext,
+  onContinue,
+}: PresentDrawBarProps) {
   const last = stepIndex >= stepCount - 1
   const many = stepCount > 1
+  const lastPause = pauseIndex >= pauseCount - 1
+  const continueLabel = lastPause ? 'Continue play' : 'Next pause'
 
   return (
     <div className="present-drawbar">
       <div>
-        <p className="eyebrow">Coach mark-up</p>
+        <p className="eyebrow">
+          {pauseCount > 1 ? `Coach mark-up · pause ${pauseIndex + 1} of ${pauseCount}` : 'Coach mark-up'}
+        </p>
         <strong>
-          {many ? `Step ${stepIndex + 1} of ${stepCount}` : 'Draw on the video, then continue the play.'}
+          {many
+            ? `Step ${stepIndex + 1} of ${stepCount} · Space for the next step`
+            : lastPause
+              ? 'Draw on the video, then Space to continue the play.'
+              : 'Draw on the video, then Space to play to the next teach pause.'}
         </strong>
       </div>
       <div className="present-drawbar-actions">
@@ -122,7 +157,7 @@ export function PresentDrawBar({ stepIndex, stepCount, onBack, onNext, onContinu
             </button>
             {last ? (
               <button type="button" className="play-btn" onClick={onContinue}>
-                Continue play
+                {continueLabel}
               </button>
             ) : (
               <button type="button" className="play-btn" onClick={onNext}>
@@ -132,7 +167,7 @@ export function PresentDrawBar({ stepIndex, stepCount, onBack, onNext, onContinu
           </>
         ) : (
           <button type="button" className="play-btn" onClick={onContinue}>
-            Continue play
+            {continueLabel}
           </button>
         )}
       </div>

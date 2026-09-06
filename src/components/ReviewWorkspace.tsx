@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { usePlaylistPresenter } from '../hooks/usePlaylistPresenter'
 import { useYouTubePlayer } from '../hooks/useYouTubePlayer'
 import {
@@ -11,7 +11,23 @@ import {
   replaceStepStrokes,
   stepStrokes,
 } from '../lib/markup'
-import { clipPauseTime, copyText, formatYoutubeChapters } from '../lib/playlist'
+import {
+  clampPlayerHeight,
+  enterFullscreen,
+  exitFullscreen,
+  fullscreenElement,
+  readPlayerHeight,
+  writePlayerHeight,
+} from '../lib/playerChrome'
+import {
+  addClipPause,
+  clipPauseTimes,
+  copyText,
+  formatPauseList,
+  formatYoutubeChapters,
+  nearestPauseIndex,
+  removeClipPause,
+} from '../lib/playlist'
 import { buildShareUrl, shareSizeWarning, writeShareToLocation } from '../lib/share'
 import { exportSession } from '../lib/storage'
 import { clamp, formatTime } from '../lib/time'
@@ -61,6 +77,10 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
   const [shareCopied, setShareCopied] = useState<string | null>(null)
   const [flash, setFlash] = useState<string | null>(null)
   const [stepIndex, setStepIndex] = useState(0)
+  const [playerHeight, setPlayerHeight] = useState(readPlayerHeight)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const playerStageRef = useRef<HTMLDivElement>(null)
+  const holdReady = presenter.phase === 'resetReady'
 
   const notify = useCallback((message: string) => {
     setFlash(message)
@@ -72,9 +92,57 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
     return () => window.clearTimeout(id)
   }, [flash])
 
+  useEffect(() => {
+    const sync = () => setIsFullscreen(fullscreenElement() === playerStageRef.current)
+    document.addEventListener('fullscreenchange', sync)
+    document.addEventListener('webkitfullscreenchange', sync)
+    return () => {
+      document.removeEventListener('fullscreenchange', sync)
+      document.removeEventListener('webkitfullscreenchange', sync)
+    }
+  }, [])
+
+  const toggleFullscreen = useCallback(() => {
+    const host = playerStageRef.current
+    if (!host) return
+    if (fullscreenElement() === host) {
+      void exitFullscreen()
+      return
+    }
+    void enterFullscreen(host)
+  }, [])
+
+  const startResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const handle = event.currentTarget
+    const startY = event.clientY
+    const startHeight = playerHeight
+    handle.setPointerCapture(event.pointerId)
+
+    const onMove = (move: PointerEvent) => {
+      const next = clampPlayerHeight(startHeight + (move.clientY - startY))
+      setPlayerHeight(next)
+    }
+    const onUp = (up: PointerEvent) => {
+      handle.releasePointerCapture(up.pointerId)
+      handle.removeEventListener('pointermove', onMove)
+      handle.removeEventListener('pointerup', onUp)
+      setPlayerHeight((current) => {
+        writePlayerHeight(current)
+        return current
+      })
+    }
+
+    handle.addEventListener('pointermove', onMove)
+    handle.addEventListener('pointerup', onUp)
+  }, [playerHeight])
+
   const selectedClip = session.clips.find((clip) => clip.id === selectedClipId) ?? null
   const drawingSource: ReviewDraft | null =
-    draft ?? (selectedClip ? { inTime: selectedClip.inTime, pauseTime: selectedClip.pauseTime, markups: selectedClip.markups } : null)
+    draft ??
+    (selectedClip
+      ? { inTime: selectedClip.inTime, pauseTimes: clipPauseTimes(selectedClip), markups: selectedClip.markups }
+      : null)
 
   const activeMarkup = useMemo(() => {
     if (player.playing || !drawingSource) return null
@@ -99,7 +167,7 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
     setHistory([])
     setFuture([])
     setStepIndex(0)
-  }, [activeMarkup?.id, presenter.phase, selectedClipId, draft?.inTime])
+  }, [activeMarkup?.id, presenter.phase, presenter.pauseIndex, selectedClipId, draft?.inTime])
 
   const persist = useCallback(
     (next: Session) => {
@@ -110,17 +178,15 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
 
   const writeMarkups = useCallback(
     (source: ReviewDraft, markups: MarkupFrame[], forceDraft = false) => {
-      const pauseTime = source.pauseTime ?? markups[0]?.time
+      const pauseTimes = source.pauseTimes
       if (draft || forceDraft || !selectedClip) {
-        setDraft({ inTime: source.inTime, pauseTime, markups })
+        setDraft({ inTime: source.inTime, pauseTimes, markups })
         return
       }
       persist({
         ...session,
         clips: session.clips.map((clip) =>
-          clip.id === selectedClip.id
-            ? { ...clip, markups, pauseTime: clip.pauseTime ?? pauseTime ?? clipPauseTime(clip) }
-            : clip,
+          clip.id === selectedClip.id ? { ...clip, markups, pauseTimes, pauseTime: pauseTimes[0] } : clip,
         ),
       })
     },
@@ -129,7 +195,7 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
 
   const resolveSource = useCallback((): ReviewDraft => {
     if (drawingSource) return drawingSource
-    return { inTime: player.getCurrentTime(), markups: [] }
+    return { inTime: player.getCurrentTime(), pauseTimes: [], markups: [] }
   }, [drawingSource, player])
 
   const writeActiveFrame = useCallback(
@@ -144,7 +210,7 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
       }
       const next = mutator(normalizeFrame(target))
       writeMarkups(
-        { ...source, pauseTime: source.pauseTime ?? time },
+        source,
         markups.map((markup) => (markup.id === next.id ? next : markup)),
         !drawingSource,
       )
@@ -183,7 +249,7 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
   const markIn = useCallback(() => {
     if (presenter.presenting) return
     const time = player.getCurrentTime()
-    setDraft({ inTime: time, pauseTime: time, markups: [] })
+    setDraft({ inTime: time, pauseTimes: [], markups: [] })
     setSelectedClipId(null)
     player.pause()
     notify(`IN marked at ${formatTime(time)}`)
@@ -192,21 +258,25 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
   const markOut = useCallback(() => {
     if (presenter.presenting) return
     const outTime = player.getCurrentTime()
-    const source = draft ?? (selectedClip ? { inTime: selectedClip.inTime, pauseTime: selectedClip.pauseTime, markups: selectedClip.markups } : null)
+    const source = draft ?? (selectedClip
+      ? { inTime: selectedClip.inTime, pauseTimes: clipPauseTimes(selectedClip), markups: selectedClip.markups }
+      : null)
     const inTime = source?.inTime ?? Math.max(0, outTime - 3)
     const markups = source?.markups ?? []
     const safeOut = Math.max(outTime, inTime + 0.4)
+    const pauseTimes = clipPauseTimes({
+      inTime,
+      outTime: safeOut,
+      pauseTimes: source?.pauseTimes,
+      markups,
+    })
     const clipIndex = session.clips.length + 1
     const clip: Clip = {
       id: crypto.randomUUID(),
       inTime,
       outTime: safeOut,
-      pauseTime: clipPauseTime({
-        inTime,
-        outTime: safeOut,
-        pauseTime: source?.pauseTime ?? markups[0]?.time ?? (inTime + safeOut) / 2,
-        markups,
-      }),
+      pauseTimes,
+      pauseTime: pauseTimes[0],
       title: `Play ${clipIndex}`,
       notes: '',
       markups,
@@ -224,22 +294,57 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
     if (presenter.presenting) return
     const time = player.getCurrentTime()
     if (draft) {
-      setDraft({ ...draft, pauseTime: Math.max(draft.inTime, time) })
-      notify(`Teach pause set at ${formatTime(time)}`)
+      const pauseTimes = addClipPause(draft.pauseTimes, time, draft.inTime, Math.max(time, draft.inTime + 0.4))
+      setDraft({ ...draft, pauseTimes })
+      notify(`Teach pause ${pauseTimes.length} at ${formatTime(time)}`)
       return
     }
     if (!selectedClip) {
-      setDraft({ inTime: Math.max(0, time - 2), pauseTime: time, markups: [] })
+      setDraft({ inTime: Math.max(0, time - 2), pauseTimes: [time], markups: [] })
       notify(`Teach pause set at ${formatTime(time)}`)
+      return
+    }
+    const pauseTimes = addClipPause(clipPauseTimes(selectedClip), time, selectedClip.inTime, selectedClip.outTime)
+    persist({
+      ...session,
+      clips: session.clips.map((clip) => (clip.id === selectedClip.id ? { ...clip, pauseTimes, pauseTime: pauseTimes[0] } : clip)),
+    })
+    notify(`Teach pause ${pauseTimes.length} at ${formatTime(time)}`)
+  }, [draft, notify, persist, player, presenter.presenting, selectedClip, session])
+
+  const removeTeachPause = useCallback(() => {
+    if (presenter.presenting) return
+    const time = player.getCurrentTime()
+    if (draft) {
+      const pauseTimes = removeClipPause(draft.pauseTimes, time)
+      if (pauseTimes.length === draft.pauseTimes.length) {
+        notify('No teach pause at this time')
+        return
+      }
+      setDraft({ ...draft, pauseTimes })
+      notify(pauseTimes.length ? 'Teach pause removed' : 'Teach pauses cleared')
+      return
+    }
+    if (!selectedClip) return
+    const current = clipPauseTimes(selectedClip)
+    const pauseTimes = removeClipPause(current, time)
+    if (pauseTimes.length === current.length) {
+      notify('No teach pause at this time')
       return
     }
     persist({
       ...session,
       clips: session.clips.map((clip) =>
-        clip.id === selectedClip.id ? { ...clip, pauseTime: clamp(time, clip.inTime, clip.outTime) } : clip,
+        clip.id === selectedClip.id
+          ? {
+              ...clip,
+              pauseTimes: pauseTimes.length ? pauseTimes : clipPauseTimes({ ...clip, pauseTimes: [] }),
+              pauseTime: (pauseTimes[0] ?? clipPauseTimes({ ...clip, pauseTimes: [] })[0]),
+            }
+          : clip,
       ),
     })
-    notify(`Teach pause set at ${formatTime(time)}`)
+    notify(pauseTimes.length ? 'Teach pause removed' : 'Last pause reset to the midpoint')
   }, [draft, notify, persist, player, presenter.presenting, selectedClip, session])
 
   const cancelIn = useCallback(() => {
@@ -258,18 +363,59 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
     [player, presenter.presenting],
   )
 
+  const focusStage = useCallback(() => {
+    playerStageRef.current?.focus({ preventScroll: true })
+  }, [])
+
   const startReview = useCallback(
     (fromIndex = 0) => {
       setDraft(null)
       const clip = session.clips[fromIndex]
       notify(clip ? `Presenting ${clip.title || `Play ${fromIndex + 1}`} — first look first` : 'Presenting playlist')
       presenter.start(fromIndex)
+      const host = playerStageRef.current
+      if (!host) return
+      const go = () => focusStage()
+      if (fullscreenElement() === host) {
+        go()
+        return
+      }
+      void enterFullscreen(host)
+        .catch(() => undefined)
+        .finally(go)
     },
-    [notify, presenter, session.clips],
+    [focusStage, notify, presenter, session.clips],
   )
 
+  const endReview = useCallback(() => {
+    presenter.stop()
+    if (fullscreenElement()) void exitFullscreen()
+  }, [presenter])
+
+  const advancePresent = useCallback(() => {
+    if (presenter.phase === 'drawing') {
+      if (safeStep < steps.length - 1) {
+        setStepIndex(safeStep + 1)
+        notify(`Step ${safeStep + 2}`)
+        return
+      }
+      notify('Continuing the play')
+      presenter.continuePlay()
+      return
+    }
+    if (presenter.phase === 'resetReady') {
+      presenter.startCoachingCountdown()
+      return
+    }
+    if (presenter.phase === 'complete') {
+      endReview()
+      return
+    }
+    presenter.skipAhead()
+  }, [endReview, notify, presenter, safeStep, steps.length])
+
   const updateClip = useCallback(
-    (id: string, patch: Partial<Pick<Clip, 'title' | 'notes' | 'pauseTime'>>) => {
+    (id: string, patch: Partial<Pick<Clip, 'title' | 'notes' | 'pauseTimes'>>) => {
       persist({
         ...session,
         clips: session.clips.map((clip) => (clip.id === id ? { ...clip, ...patch } : clip)),
@@ -331,31 +477,40 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
   }, [notify, session])
 
   useEffect(() => {
+    if (!presenter.presenting) return
+    focusStage()
+  }, [focusStage, presenter.phase, presenter.presenting])
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
 
+      if (event.key === 'f' || event.key === 'F') {
+        event.preventDefault()
+        toggleFullscreen()
+        return
+      }
+
       if (presenter.presenting) {
-        if (presenter.phase === 'drawing') {
-          if (event.code === 'Space' || event.key === 'k' || event.key === 'K' || event.key === 'ArrowRight') {
-            event.preventDefault()
-            if (safeStep < steps.length - 1) setStepIndex(safeStep + 1)
-            else presenter.continuePlay()
-            return
-          }
-          if (event.key === 'ArrowLeft') {
-            event.preventDefault()
-            setStepIndex(Math.max(0, safeStep - 1))
-            return
-          }
-        }
         if (event.code === 'Space' || event.key === 'k' || event.key === 'K') {
           event.preventDefault()
-          presenter.skipAhead()
+          advancePresent()
+          return
+        }
+        if (presenter.phase === 'drawing' && event.key === 'ArrowRight') {
+          event.preventDefault()
+          advancePresent()
+          return
+        }
+        if (presenter.phase === 'drawing' && event.key === 'ArrowLeft') {
+          event.preventDefault()
+          setStepIndex(Math.max(0, safeStep - 1))
           return
         }
         if (event.key === 'Escape') {
-          presenter.stop()
+          event.preventDefault()
+          endReview()
         }
         return
       }
@@ -372,7 +527,8 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
       }
       if (event.key === 'p' || event.key === 'P') {
         event.preventDefault()
-        setTeachPause()
+        if (event.shiftKey) removeTeachPause()
+        else setTeachPause()
         return
       }
       if (event.key === 'o' || event.key === 'O') {
@@ -412,21 +568,24 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
       }
     }
 
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [
+    advancePresent,
     cancelIn,
+    endReview,
     future,
     history,
     markIn,
     markOut,
     player,
     presenter,
+    removeTeachPause,
     safeStep,
     seekBy,
     setTeachPause,
-    steps.length,
     strokes,
+    toggleFullscreen,
     updateActiveStrokes,
   ])
 
@@ -457,7 +616,7 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
         </div>
         <div className="top-actions">
           {presenter.presenting ? (
-            <button type="button" className="ghost" onClick={presenter.stop}>
+            <button type="button" className="ghost" onClick={endReview}>
               Exit presentation
             </button>
           ) : (
@@ -478,39 +637,82 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
 
       <div className="workspace-body">
         <section className="stage-column">
-          <div className="stage-frame">
-            <div ref={player.hostRef} className="yt-host" />
-            {player.playing && !presenter.presenting ? (
-              <button type="button" className="play-shield" aria-label="Pause video" onClick={player.pause} />
-            ) : null}
-            <DrawingCanvas
-              enabled={canDraw}
-              strokes={player.playing ? [] : strokes}
-              backdrop={player.playing ? [] : backdrop}
-              tool={tool}
-              color={color}
-              brush={brush}
-              onChange={updateActiveStrokes}
+          <div
+            ref={playerStageRef}
+            className={`review-stage${isFullscreen ? ' is-fullscreen' : ''}${presenter.presenting ? ' is-presenting' : ''}`}
+            tabIndex={-1}
+          >
+          <div className="player-stage">
+            <div className="stage-frame" style={isFullscreen ? undefined : { height: playerHeight }}>
+              <div ref={player.hostRef} className="yt-host" />
+              {player.playing && presenter.phase !== 'drawing' ? (
+                <button
+                  type="button"
+                  className="play-shield"
+                  aria-label={presenter.presenting ? 'Advance review' : 'Pause video'}
+                  onClick={presenter.presenting ? advancePresent : player.pause}
+                />
+              ) : null}
+              <DrawingCanvas
+                enabled={canDraw}
+                strokes={player.playing ? [] : strokes}
+                backdrop={player.playing ? [] : backdrop}
+                tool={tool}
+                color={color}
+                brush={brush}
+                onChange={updateActiveStrokes}
+              />
+              <PresentOverlay
+                phase={presenter.phase}
+                clip={presenter.currentClip}
+                clipIndex={presenter.clipIndex}
+                pauseIndex={presenter.pauseIndex}
+                pauseCount={presenter.pauseCount}
+                total={session.clips.length}
+                holdMs={presenter.holdMs}
+                holdTotal={presenter.holdTotal}
+                onSkip={advancePresent}
+                onReady={presenter.startCoachingCountdown}
+                onExit={endReview}
+              />
+              <ActionToast message={flash} />
+              {draft && !presenter.presenting ? (
+                <div className="in-banner">
+                  IN {formatTime(draft.inTime)}
+                  {draft.pauseTimes.length ? ` · ${formatPauseList(draft.pauseTimes)}` : ''}
+                  {' — hit OUT to add it to the playlist'}
+                </div>
+              ) : null}
+              {player.error ? <div className="player-error">{player.error}</div> : null}
+              <button
+                type="button"
+                className="fs-btn"
+                onClick={toggleFullscreen}
+                aria-pressed={isFullscreen}
+              >
+                {isFullscreen ? 'Exit full screen' : 'Full screen'}
+              </button>
+            </div>
+
+            {isFullscreen ? null : (
+              <div
+                className="player-resize"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="Resize video player"
+                onPointerDown={startResize}
+              />
+            )}
+
+            <Timeline
+              duration={player.duration}
+              currentTime={player.currentTime}
+              clips={session.clips}
+              draft={draft}
+              selectedClipId={selectedClipId}
+              locked={presenter.presenting}
+              onSeek={(time) => player.seekTo(time)}
             />
-            <PresentOverlay
-              phase={presenter.phase}
-              clip={presenter.currentClip}
-              clipIndex={presenter.clipIndex}
-              total={session.clips.length}
-              holdMs={presenter.holdMs}
-              holdTotal={presenter.holdTotal}
-              onSkip={presenter.skipAhead}
-              onExit={presenter.stop}
-            />
-            <ActionToast message={flash} />
-            {draft && !presenter.presenting ? (
-              <div className="in-banner">
-                IN {formatTime(draft.inTime)}
-                {draft.pauseTime !== undefined ? ` · teach pause ${formatTime(draft.pauseTime)}` : ''}
-                {' — hit OUT to add it to the playlist'}
-              </div>
-            ) : null}
-            {player.error ? <div className="player-error">{player.error}</div> : null}
           </div>
 
           {presenter.presenting ? null : (
@@ -539,10 +741,12 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
             hint={
               canDraw
                 ? presenter.presenting
-                  ? `Showing step ${safeStep + 1} of ${Math.max(1, steps.length)}.`
+                  ? presenter.pauseCount > 1
+                    ? `Pause ${presenter.pauseIndex + 1} of ${presenter.pauseCount}. Showing step ${safeStep + 1} of ${Math.max(1, steps.length)}.`
+                    : `Showing step ${safeStep + 1} of ${Math.max(1, steps.length)}.`
                   : `Editing step ${safeStep + 1}. Add a step when this thought is done.`
                 : presenter.presenting
-                  ? 'Playlist is running. Tools unlock at the coach mark-up pause.'
+                  ? 'Space advances the review. Tools unlock at the coach mark-up pause.'
                   : 'Pause the video to use drawing tools.'
             }
             onTool={(next) => {
@@ -580,15 +784,6 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
           />
 
           <div className={`stage-controls${presenter.phase === 'drawing' ? ' is-marking' : ''}`}>
-          <Timeline
-            duration={player.duration}
-            currentTime={player.currentTime}
-            clips={session.clips}
-            draft={draft}
-            selectedClipId={selectedClipId}
-            locked={presenter.presenting}
-            onSeek={(time) => player.seekTo(time)}
-          />
           <Transport
             playing={player.playing}
             ready={player.ready}
@@ -597,21 +792,33 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
             playbackRate={player.playbackRate}
             hasDraft={Boolean(draft)}
             presenting={presenter.presenting}
-            onToggle={player.toggle}
+            holdReady={holdReady}
+            onToggle={holdReady ? presenter.startCoachingCountdown : player.toggle}
             onSeek={seekBy}
             onRate={player.setRate}
             onMarkIn={markIn}
             onMarkOut={markOut}
             onCancelIn={cancelIn}
             onSetPause={setTeachPause}
+            onRemovePause={removeTeachPause}
+            canRemovePause={
+              nearestPauseIndex(
+                draft?.pauseTimes ?? (selectedClip ? clipPauseTimes(selectedClip) : []),
+                player.currentTime,
+              ) >= 0
+            }
           />
           <p className="shortcuts">
-            Space play/pause · I in · P teach pause · O out · Present playlist for the player review
+            {presenter.presenting
+              ? 'Space advances waits, coaching steps, teach pauses, and play-out · Esc exits full screen review'
+              : 'Space play/pause · F full screen · I in · P add pause · Shift+P remove pause · O out'}
           </p>
           {presenter.phase === 'drawing' ? (
             <PresentDrawBar
               stepIndex={safeStep}
               stepCount={Math.max(1, steps.length)}
+              pauseIndex={presenter.pauseIndex}
+              pauseCount={presenter.pauseCount}
               onBack={() => setStepIndex(Math.max(0, safeStep - 1))}
               onNext={() => setStepIndex(Math.min(steps.length - 1, safeStep + 1))}
               onContinue={() => {
@@ -620,6 +827,7 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
               }}
             />
           ) : null}
+          </div>
           </div>
         </section>
 

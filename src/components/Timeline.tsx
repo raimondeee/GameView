@@ -1,5 +1,5 @@
 import { Fragment, useRef } from 'react'
-import { clipPauseTime } from '../lib/playlist'
+import { clipPauseTimes } from '../lib/playlist'
 import { clamp } from '../lib/time'
 import type { Clip, ReviewDraft } from '../types'
 
@@ -60,16 +60,20 @@ export function Timeline({
               className={`clip-range${selectedClipId === clip.id ? ' is-selected' : ''}`}
               style={{ left: `${left}%`, width: `${width}%` }}
             />
-            <span className="pause-tick" style={{ left: `${(clipPauseTime(clip) / duration) * 100}%` }} />
+            {clipPauseTimes(clip).map((time) => (
+              <span key={`${clip.id}-${time}`} className="pause-tick" style={{ left: `${(time / duration) * 100}%` }} />
+            ))}
           </Fragment>
         )
       })}
       {draft && duration > 0 ? (
         <span className="in-tick" style={{ left: `${(draft.inTime / duration) * 100}%` }} />
       ) : null}
-      {draft?.pauseTime !== undefined && duration > 0 ? (
-        <span className="pause-tick" style={{ left: `${(draft.pauseTime / duration) * 100}%` }} />
-      ) : null}
+      {draft && duration > 0
+        ? draft.pauseTimes.map((time) => (
+            <span key={`draft-${time}`} className="pause-tick" style={{ left: `${(time / duration) * 100}%` }} />
+          ))
+        : null}
       {duration > 0 ? (
         <span className="playhead" style={{ left: `${(currentTime / duration) * 100}%` }} />
       ) : null}

@@ -10,6 +10,7 @@ type TransportProps = {
   playbackRate: number
   hasDraft: boolean
   presenting: boolean
+  holdReady?: boolean
   onToggle: () => void
   onSeek: (delta: number) => void
   onRate: (rate: number) => void
@@ -17,6 +18,8 @@ type TransportProps = {
   onMarkOut: () => void
   onCancelIn: () => void
   onSetPause: () => void
+  onRemovePause?: () => void
+  canRemovePause?: boolean
 }
 
 export function Transport({
@@ -27,6 +30,7 @@ export function Transport({
   playbackRate,
   hasDraft,
   presenting,
+  holdReady = false,
   onToggle,
   onSeek,
   onRate,
@@ -34,6 +38,8 @@ export function Transport({
   onMarkOut,
   onCancelIn,
   onSetPause,
+  onRemovePause,
+  canRemovePause = false,
 }: TransportProps) {
   return (
     <div className="transport">
@@ -41,8 +47,8 @@ export function Transport({
         <button type="button" className="icon-btn" disabled={!ready || presenting} onClick={() => onSeek(-2)}>
           −2s
         </button>
-        <button type="button" className="play-btn" disabled={!ready || presenting} onClick={onToggle}>
-          {playing ? 'Pause' : 'Play'}
+        <button type="button" className="play-btn" disabled={!ready || (presenting && !holdReady)} onClick={onToggle}>
+          {playing && !holdReady ? 'Pause' : 'Play'}
         </button>
         <button type="button" className="icon-btn" disabled={!ready || presenting} onClick={() => onSeek(2)}>
           +2s
@@ -58,8 +64,13 @@ export function Transport({
           IN
         </button>
         <button type="button" className="pause-btn" disabled={!ready || presenting} onClick={onSetPause}>
-          Teach pause
+          Add pause
         </button>
+        {canRemovePause && onRemovePause ? (
+          <button type="button" className="ghost" disabled={!ready || presenting} onClick={onRemovePause}>
+            Remove pause
+          </button>
+        ) : null}
         <button type="button" className="out-btn" disabled={!ready || presenting} onClick={onMarkOut}>
           OUT
         </button>

@@ -30,7 +30,8 @@ export type Clip = {
   id: string
   inTime: number
   outTime: number
-  pauseTime: number
+  pauseTimes: number[]
+  pauseTime?: number
   title: string
   notes: string
   markups: MarkupFrame[]
@@ -48,7 +49,7 @@ export type Session = {
 
 export type ReviewDraft = {
   inTime: number
-  pauseTime?: number
+  pauseTimes: number[]
   markups: MarkupFrame[]
 }
 
@@ -56,6 +57,7 @@ export type PresentPhase =
   | 'off'
   | 'announce'
   | 'firstLook'
+  | 'resetReady'
   | 'reset'
   | 'toPause'
   | 'drawing'

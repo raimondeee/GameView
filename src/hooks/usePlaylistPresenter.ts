@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { clipPauseTime } from '../lib/playlist'
+import { clipPauseTimes, coachingFromTime, coachingToTime } from '../lib/playlist'
 import type { Clip, PresentPhase } from '../types'
 import type { PlayerControls } from './useYouTubePlayer'
 
@@ -10,6 +10,8 @@ const SEEK_ARM_MS = 320
 type Presenter = {
   phase: PresentPhase
   clipIndex: number
+  pauseIndex: number
+  pauseCount: number
   presenting: boolean
   currentClip: Clip | null
   holdMs: number
@@ -18,17 +20,20 @@ type Presenter = {
   stop: () => void
   continuePlay: () => void
   skipAhead: () => void
+  startCoachingCountdown: () => void
 }
 
 export function usePlaylistPresenter(clips: Clip[], player: PlayerControls): Presenter {
   const [phase, setPhase] = useState<PresentPhase>('off')
   const [clipIndex, setClipIndex] = useState(0)
+  const [pauseIndex, setPauseIndex] = useState(0)
   const [holdMs, setHoldMs] = useState(0)
   const [holdTotal, setHoldTotal] = useState(0)
   const holdUntilRef = useRef(0)
   const armedRef = useRef(false)
   const phaseRef = useRef<PresentPhase>('off')
   const indexRef = useRef(0)
+  const pauseIndexRef = useRef(0)
   const clipsRef = useRef(clips)
   const playerRef = useRef(player)
   const timersRef = useRef<number[]>([])
@@ -37,6 +42,7 @@ export function usePlaylistPresenter(clips: Clip[], player: PlayerControls): Pre
   playerRef.current = player
   phaseRef.current = phase
   indexRef.current = clipIndex
+  pauseIndexRef.current = pauseIndex
 
   const clearTimers = useCallback(() => {
     for (const id of timersRef.current) window.clearTimeout(id)
@@ -51,6 +57,11 @@ export function usePlaylistPresenter(clips: Clip[], player: PlayerControls): Pre
   const setPhaseBoth = (next: PresentPhase) => {
     phaseRef.current = next
     setPhase(next)
+  }
+
+  const setPauseBoth = (next: number) => {
+    pauseIndexRef.current = next
+    setPauseIndex(next)
   }
 
   const beginHold = (ms: number) => {
@@ -85,7 +96,7 @@ export function usePlaylistPresenter(clips: Clip[], player: PlayerControls): Pre
       clearTimers()
       armedRef.current = false
       setPhaseBoth('toPause')
-      api.seekTo(clip.inTime)
+      api.seekTo(coachingFromTime(clip, pauseIndexRef.current))
       later(SEEK_ARM_MS, () => {
         armedRef.current = true
         api.play()
@@ -102,13 +113,13 @@ export function usePlaylistPresenter(clips: Clip[], player: PlayerControls): Pre
       clearTimers()
       armedRef.current = false
       api.pause()
-      api.seekTo(clipPauseTime(clip))
+      api.seekTo(coachingToTime(clip, pauseIndexRef.current))
       setPhaseBoth('drawing')
     },
     [clearTimers],
   )
 
-  const startReset = useCallback(
+  const startResetGate = useCallback(
     (index: number) => {
       const clip = clipsRef.current[index]
       const api = playerRef.current
@@ -117,12 +128,35 @@ export function usePlaylistPresenter(clips: Clip[], player: PlayerControls): Pre
       armedRef.current = false
       api.pause()
       api.seekTo(clip.inTime)
+      setHoldMs(0)
+      setHoldTotal(0)
+      setPauseBoth(0)
+      setPhaseBoth('resetReady')
+    },
+    [clearTimers],
+  )
+
+  const startResetTimer = useCallback(
+    (index: number) => {
+      const clip = clipsRef.current[index]
+      const api = playerRef.current
+      if (!clip) return
+      clearTimers()
+      armedRef.current = false
+      api.pause()
+      api.seekTo(clip.inTime)
+      setPauseBoth(0)
       setPhaseBoth('reset')
       beginHold(RESET_MS)
       later(RESET_MS, () => startToPause(index))
     },
     [clearTimers, later, startToPause],
   )
+
+  const startCoachingCountdown = useCallback(() => {
+    if (phaseRef.current !== 'resetReady') return
+    startResetTimer(indexRef.current)
+  }, [startResetTimer])
 
   const announce = useCallback(
     (index: number) => {
@@ -137,6 +171,7 @@ export function usePlaylistPresenter(clips: Clip[], player: PlayerControls): Pre
       }
       indexRef.current = index
       setClipIndex(index)
+      setPauseBoth(0)
       setPhaseBoth('announce')
       api.pause()
       api.seekTo(clip.inTime)
@@ -151,10 +186,22 @@ export function usePlaylistPresenter(clips: Clip[], player: PlayerControls): Pre
     const clip = clipsRef.current[index]
     const api = playerRef.current
     if (!clip || phaseRef.current !== 'drawing') return
+    const pauses = clipPauseTimes(clip)
+    const nextPause = pauseIndexRef.current + 1
     clearTimers()
     armedRef.current = false
+    if (nextPause < pauses.length) {
+      setPauseBoth(nextPause)
+      setPhaseBoth('toPause')
+      api.seekTo(pauses[nextPause - 1] ?? clip.inTime)
+      later(SEEK_ARM_MS, () => {
+        armedRef.current = true
+        api.play()
+      })
+      return
+    }
     setPhaseBoth('finish')
-    api.seekTo(clipPauseTime(clip))
+    api.seekTo(pauses[pauses.length - 1] ?? clip.inTime)
     later(SEEK_ARM_MS, () => {
       armedRef.current = true
       api.play()
@@ -180,6 +227,7 @@ export function usePlaylistPresenter(clips: Clip[], player: PlayerControls): Pre
   const stop = useCallback(() => {
     clearTimers()
     armedRef.current = false
+    setPauseBoth(0)
     setPhaseBoth('off')
     playerRef.current.pause()
   }, [clearTimers])
@@ -202,25 +250,26 @@ export function usePlaylistPresenter(clips: Clip[], player: PlayerControls): Pre
     const clip = clips[clipIndex]
     if (!clip) return
 
-    const target = phase === 'toPause' ? clipPauseTime(clip) : clip.outTime
+    const target = phase === 'toPause' ? coachingToTime(clip, pauseIndex) : clip.outTime
     if (player.currentTime + 0.08 >= target) {
-      if (phase === 'firstLook') startReset(clipIndex)
+      if (phase === 'firstLook') startResetGate(clipIndex)
       else if (phase === 'toPause') startDrawing(clipIndex)
       else finishClip(clipIndex)
     }
-  }, [clipIndex, clips, finishClip, phase, player.currentTime, player.playing, startDrawing, startReset])
+  }, [clipIndex, clips, finishClip, pauseIndex, phase, player.currentTime, player.playing, startDrawing, startResetGate])
 
   const skipAhead = useCallback(() => {
     const index = indexRef.current
     const current = phaseRef.current
     if (current === 'announce') startFirstLook(index)
-    else if (current === 'firstLook') startReset(index)
+    else if (current === 'firstLook') startResetGate(index)
+    else if (current === 'resetReady') startResetTimer(index)
     else if (current === 'reset') startToPause(index)
     else if (current === 'toPause') startDrawing(index)
     else if (current === 'drawing') continuePlay()
     else if (current === 'finish') finishClip(index)
     else if (current === 'complete') stop()
-  }, [continuePlay, finishClip, startDrawing, startFirstLook, startReset, startToPause, stop])
+  }, [continuePlay, finishClip, startDrawing, startFirstLook, startResetGate, startResetTimer, startToPause, stop])
 
   const start = useCallback(
     (fromIndex = 0) => {
@@ -233,16 +282,21 @@ export function usePlaylistPresenter(clips: Clip[], player: PlayerControls): Pre
 
   useEffect(() => () => clearTimers(), [clearTimers])
 
+  const currentClip = phase === 'off' ? null : (clips[clipIndex] ?? null)
+
   return {
     phase,
     clipIndex,
+    pauseIndex,
+    pauseCount: currentClip ? clipPauseTimes(currentClip).length : 0,
     presenting: phase !== 'off',
-    currentClip: phase === 'off' ? null : (clips[clipIndex] ?? null),
+    currentClip,
     holdMs,
     holdTotal,
     start,
     stop,
     continuePlay,
     skipAhead,
+    startCoachingCountdown,
   }
 }

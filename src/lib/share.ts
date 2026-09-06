@@ -1,4 +1,4 @@
-import { normalizeSession } from './playlist'
+import { clipPauseTime, normalizeSession } from './playlist'
 import type { Clip, MarkupFrame, Session, ShapeTool, Stroke } from '../types'
 
 const SHARE_VERSION = 1
@@ -7,7 +7,7 @@ const HARD_LIMIT = 140000
 
 type PackedStroke = [ShapeTool, string, number, number[]]
 type PackedMarkup = [number, PackedStroke[] | PackedStroke[][]]
-type PackedClip = [number, number, number, string, string, PackedMarkup[]]
+type PackedClip = [number, number, number | number[], string, string, PackedMarkup[]]
 
 type PackedShare = {
   v: number
@@ -53,7 +53,7 @@ function packSession(session: Session): PackedShare {
     clips: session.clips.map((clip) => [
       round(clip.inTime),
       round(clip.outTime),
-      round(clip.pauseTime),
+      clip.pauseTimes.length > 1 ? clip.pauseTimes.map(round) : round(clipPauseTime(clip)),
       clip.title,
       clip.notes,
       clip.markups.map((markup) => [
@@ -80,11 +80,14 @@ function unpackSession(packed: PackedShare): Session {
         })),
       }
     })
+    const packedPauses = clip[2]
+    const pauseTimes = Array.isArray(packedPauses) ? packedPauses : [packedPauses]
     return {
       id: crypto.randomUUID(),
       inTime: clip[0],
       outTime: clip[1],
-      pauseTime: clip[2],
+      pauseTimes,
+      pauseTime: pauseTimes[0],
       title: clip[3],
       notes: clip[4],
       markups,

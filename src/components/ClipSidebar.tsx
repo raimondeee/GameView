@@ -1,8 +1,8 @@
-import { formatRange, formatTime } from '../lib/time'
-import { clipPauseTime, playNumber } from '../lib/playlist'
+import { formatRange } from '../lib/time'
+import { formatPauseList, playNumber } from '../lib/playlist'
 import type { Clip } from '../types'
 
-type ClipPatch = Partial<Pick<Clip, 'title' | 'notes' | 'pauseTime'>>
+type ClipPatch = Partial<Pick<Clip, 'title' | 'notes' | 'pauseTimes'>>
 
 type ClipSidebarProps = {
   clips: Clip[]
@@ -66,7 +66,8 @@ export function ClipSidebar({
 
       {clips.length === 0 ? (
         <p className="empty-clips">
-          Mark <strong>IN</strong> when a play starts, set a teach pause, then mark <strong>OUT</strong>.
+          Mark <strong>IN</strong> when a play starts, add one or more teach pauses, then mark{' '}
+          <strong>OUT</strong>.
         </p>
       ) : (
         <ul className="clip-list">
@@ -80,7 +81,7 @@ export function ClipSidebar({
                   <span className="clip-meta">
                     <strong>{clip.title || playNumber(index)}</strong>
                     <em>
-                      {formatRange(clip.inTime, clip.outTime)} · pause {formatTime(clipPauseTime(clip))}
+                      {formatRange(clip.inTime, clip.outTime)} · {formatPauseList(clip.pauseTimes)}
                     </em>
                   </span>
                 </button>
