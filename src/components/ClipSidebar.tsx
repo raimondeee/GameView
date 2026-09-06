@@ -1,4 +1,4 @@
-import { formatRange } from '../lib/time'
+import { formatRange, formatTime } from '../lib/time'
 import { formatPauseList, playNumber } from '../lib/playlist'
 import type { Clip } from '../types'
 
@@ -20,6 +20,7 @@ type ClipSidebarProps = {
   onMove: (id: string, direction: -1 | 1) => void
   onCopyChapters: () => void
   onCopyShare: () => void
+  onSeek?: (time: number) => void
 }
 
 export function ClipSidebar({
@@ -38,6 +39,7 @@ export function ClipSidebar({
   onMove,
   onCopyChapters,
   onCopyShare,
+  onSeek,
 }: ClipSidebarProps) {
   return (
     <aside className="sidebar">
@@ -121,6 +123,21 @@ export function ClipSidebar({
                         onChange={(event) => onUpdate(clip.id, { notes: event.target.value })}
                       />
                     </label>
+                    {onSeek ? (
+                      <div className="clip-marks">
+                        <button type="button" onClick={() => onSeek(clip.inTime)}>
+                          IN {formatTime(clip.inTime)}
+                        </button>
+                        {clip.pauseTimes.map((time, pauseIndex) => (
+                          <button key={`${clip.id}-p-${pauseIndex}`} type="button" onClick={() => onSeek(time)}>
+                            P{pauseIndex + 1} {formatTime(time)}
+                          </button>
+                        ))}
+                        <button type="button" onClick={() => onSeek(clip.outTime)}>
+                          OUT {formatTime(clip.outTime)}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </li>

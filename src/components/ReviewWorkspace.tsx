@@ -33,6 +33,7 @@ import { exportSession } from '../lib/storage'
 import { clamp, formatTime } from '../lib/time'
 import type { Clip, DrawTool, MarkupFrame, ReviewDraft, Session, Stroke } from '../types'
 import { ActionToast } from './ActionToast'
+import { ClipEditorSidebar } from './ClipEditorSidebar'
 import { ClipSidebar } from './ClipSidebar'
 import { DrawingCanvas } from './DrawingCanvas'
 import { DrawingToolbar } from './DrawingToolbar'
@@ -312,9 +313,9 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
     notify(`Teach pause ${pauseTimes.length} at ${formatTime(time)}`)
   }, [draft, notify, persist, player, presenter.presenting, selectedClip, session])
 
-  const removeTeachPause = useCallback(() => {
+  const removeTeachPause = useCallback((atTime?: number) => {
     if (presenter.presenting) return
-    const time = player.getCurrentTime()
+    const time = atTime ?? player.getCurrentTime()
     if (draft) {
       const pauseTimes = removeClipPause(draft.pauseTimes, time)
       if (pauseTimes.length === draft.pauseTimes.length) {
@@ -351,6 +352,15 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
     setDraft(null)
     notify('IN cancelled')
   }, [notify])
+
+  const seekToMark = useCallback(
+    (time: number) => {
+      if (presenter.presenting) return
+      player.pause()
+      player.seekTo(time)
+    },
+    [player, presenter.presenting],
+  )
 
   const selectClip = useCallback(
     (clip: Clip) => {
@@ -800,7 +810,7 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
             onMarkOut={markOut}
             onCancelIn={cancelIn}
             onSetPause={setTeachPause}
-            onRemovePause={removeTeachPause}
+            onRemovePause={() => removeTeachPause()}
             canRemovePause={
               nearestPauseIndex(
                 draft?.pauseTimes ?? (selectedClip ? clipPauseTimes(selectedClip) : []),
@@ -831,23 +841,35 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
           </div>
         </section>
 
-        <ClipSidebar
-          clips={session.clips}
-          selectedId={selectedClipId}
-          presenting={presenter.presenting}
-          playerReady={player.ready}
-          activeIndex={presenter.presenting ? presenter.clipIndex : null}
-          copied={copied}
-          shareCopied={shareCopied}
-          onSelect={selectClip}
-          onPlay={(_clip, index) => startReview(index)}
-          onPresent={startReview}
-          onUpdate={updateClip}
-          onDelete={deleteClip}
-          onMove={moveClip}
-          onCopyChapters={copyChapters}
-          onCopyShare={copyShare}
-        />
+        {draft && !presenter.presenting ? (
+          <ClipEditorSidebar
+            inTime={draft.inTime}
+            pauseTimes={draft.pauseTimes}
+            currentTime={player.currentTime}
+            onSeek={seekToMark}
+            onRemovePause={removeTeachPause}
+            onCancel={cancelIn}
+          />
+        ) : (
+          <ClipSidebar
+            clips={session.clips}
+            selectedId={selectedClipId}
+            presenting={presenter.presenting}
+            playerReady={player.ready}
+            activeIndex={presenter.presenting ? presenter.clipIndex : null}
+            copied={copied}
+            shareCopied={shareCopied}
+            onSelect={selectClip}
+            onPlay={(_clip, index) => startReview(index)}
+            onPresent={startReview}
+            onUpdate={updateClip}
+            onDelete={deleteClip}
+            onMove={moveClip}
+            onCopyChapters={copyChapters}
+            onCopyShare={copyShare}
+            onSeek={seekToMark}
+          />
+        )}
       </div>
     </div>
   )
