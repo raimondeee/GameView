@@ -145,16 +145,22 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
       ? { inTime: selectedClip.inTime, pauseTimes: clipPauseTimes(selectedClip), markups: selectedClip.markups }
       : null)
 
+  const playbackLive =
+    player.playing ||
+    presenter.phase === 'firstLook' ||
+    presenter.phase === 'toPause' ||
+    presenter.phase === 'finish'
+
   const activeMarkup = useMemo(() => {
-    if (player.playing || !drawingSource) return null
+    if (playbackLive || !drawingSource) return null
     return nearestMarkup(drawingSource.markups, player.currentTime) ?? null
-  }, [drawingSource, player.currentTime, player.playing])
+  }, [drawingSource, playbackLive, player.currentTime])
 
   const steps = activeMarkup ? frameSteps(activeMarkup) : []
   const safeStep = Math.min(stepIndex, Math.max(0, steps.length - 1))
   const strokes = activeMarkup ? stepStrokes(activeMarkup, safeStep) : []
   const backdrop = activeMarkup ? backdropStrokes(activeMarkup, safeStep) : []
-  const canDraw = player.ready && !player.playing && (!presenter.presenting || presenter.phase === 'drawing')
+  const canDraw = player.ready && !playbackLive && (!presenter.presenting || presenter.phase === 'drawing')
 
   useEffect(() => {
     setTitle(session.title)
@@ -649,13 +655,13 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
         <section className="stage-column">
           <div
             ref={playerStageRef}
-            className={`review-stage${isFullscreen ? ' is-fullscreen' : ''}${presenter.presenting ? ' is-presenting' : ''}`}
+            className={`review-stage${isFullscreen ? ' is-fullscreen' : ''}${presenter.presenting ? ' is-presenting' : ''}${presenter.phase === 'drawing' ? ' is-marking' : ''}`}
             tabIndex={-1}
           >
           <div className="player-stage">
             <div className="stage-frame" style={isFullscreen ? undefined : { height: playerHeight }}>
               <div ref={player.hostRef} className="yt-host" />
-              {player.playing && presenter.phase !== 'drawing' ? (
+              {playbackLive && presenter.phase !== 'drawing' ? (
                 <button
                   type="button"
                   className="play-shield"
@@ -665,8 +671,9 @@ export function ReviewWorkspace({ session, onSessionChange, onClose }: ReviewWor
               ) : null}
               <DrawingCanvas
                 enabled={canDraw}
-                strokes={player.playing ? [] : strokes}
-                backdrop={player.playing ? [] : backdrop}
+                hidden={playbackLive}
+                strokes={playbackLive ? [] : strokes}
+                backdrop={playbackLive ? [] : backdrop}
                 tool={tool}
                 color={color}
                 brush={brush}

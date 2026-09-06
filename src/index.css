@@ -395,8 +395,20 @@ button:focus-visible {
   margin-top: 12px;
 }
 
-.review-stage.is-fullscreen .draw-tools,
-.review-stage.is-fullscreen .stage-controls {
+.review-stage.is-fullscreen .step-rail,
+.review-stage.is-fullscreen .in-banner,
+.review-stage.is-fullscreen:not(.is-marking) .draw-tools,
+.review-stage.is-fullscreen:not(.is-marking) .stage-controls {
+  display: none;
+}
+
+.review-stage.is-fullscreen.is-marking .transport,
+.review-stage.is-fullscreen.is-marking .shortcuts {
+  display: none;
+}
+
+.review-stage.is-fullscreen.is-marking .draw-tools,
+.review-stage.is-fullscreen.is-marking .stage-controls {
   flex: 0 0 auto;
 }
 
@@ -419,6 +431,11 @@ button:focus-visible {
 .draw-layer.is-active {
   pointer-events: auto;
   cursor: crosshair;
+}
+
+.draw-layer.is-hidden {
+  opacity: 0;
+  visibility: hidden;
 }
 
 .play-shield {

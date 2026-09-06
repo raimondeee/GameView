@@ -4,6 +4,7 @@ import type { DrawTool, Point, ShapeTool, Stroke } from '../types'
 
 type DrawingCanvasProps = {
   enabled: boolean
+  hidden?: boolean
   strokes: Stroke[]
   backdrop?: Stroke[]
   tool: DrawTool
@@ -21,6 +22,7 @@ function normalize(event: PointerEvent, rect: DOMRect): Point {
 
 export function DrawingCanvas({
   enabled,
+  hidden = false,
   strokes,
   backdrop = [],
   tool,
@@ -55,6 +57,7 @@ export function DrawingCanvas({
       if (!ctx) return
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       ctx.clearRect(0, 0, rect.width, rect.height)
+      if (hidden) return
       for (const stroke of backdrop) renderStroke(ctx, stroke, rect.width, rect.height, 0.38)
       for (const stroke of strokes) renderStroke(ctx, stroke, rect.width, rect.height)
       if (liveRef.current) renderStroke(ctx, liveRef.current, rect.width, rect.height)
@@ -64,11 +67,11 @@ export function DrawingCanvas({
     const observer = new ResizeObserver(paint)
     observer.observe(canvas.parentElement ?? canvas)
     return () => observer.disconnect()
-  }, [backdrop, live, strokes])
+  }, [backdrop, hidden, live, strokes])
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas || !enabled) return
+    if (!canvas || !enabled || hidden) return
 
     const onDown = (event: PointerEvent) => {
       if (event.button !== 0) return
@@ -133,13 +136,13 @@ export function DrawingCanvas({
       canvas.removeEventListener('pointerup', finish)
       canvas.removeEventListener('pointercancel', finish)
     }
-  }, [brush, color, enabled, onChange, strokes, tool])
+  }, [brush, color, enabled, hidden, onChange, strokes, tool])
 
   return (
     <canvas
       ref={canvasRef}
-      className={`draw-layer${enabled ? ' is-active' : ''}`}
-      aria-hidden={!enabled}
+      className={`draw-layer${enabled ? ' is-active' : ''}${hidden ? ' is-hidden' : ''}`}
+      aria-hidden={!enabled || hidden}
     />
   )
 }

@@ -67,8 +67,10 @@ export function useYouTubePlayer(videoId: string | null): PlayerControls {
             },
             onStateChange: (event) => {
               const state = event.data
-              setPlaying(state === window.YT.PlayerState.PLAYING)
-              if (state === window.YT.PlayerState.PAUSED || state === window.YT.PlayerState.ENDED) {
+              const states = window.YT.PlayerState
+              if (state === states.PLAYING || state === states.BUFFERING) {
+                setPlaying(true)
+              } else if (state === states.PAUSED || state === states.ENDED) {
                 setPlaying(false)
               }
               if (typeof event.target.getCurrentTime === 'function') {
@@ -116,10 +118,12 @@ export function useYouTubePlayer(videoId: string | null): PlayerControls {
   }, [ready])
 
   const play = useCallback(() => {
+    setPlaying(true)
     playerRef.current?.playVideo()
   }, [])
 
   const pause = useCallback(() => {
+    setPlaying(false)
     playerRef.current?.pauseVideo()
   }, [])
 
