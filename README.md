@@ -12,6 +12,12 @@ https://raimondeee.github.io/GameView/
 - **Copy share link** sends another coach the full playlist (clips, pauses, drawings, steps)
 - **Export JSON** / **Open playlist file** works as a backup
 
+## Install on iPad or iPhone
+
+1. Open the Pages URL in **Safari**
+2. Tap **Share** → **Add to Home Screen**
+3. Open the GameView icon — it launches standalone, without Safari chrome
+
 ## Develop locally
 
 ```bash
